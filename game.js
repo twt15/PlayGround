@@ -1,6 +1,7 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const starCountEl = document.getElementById('starCount');
+const catchCountEl = document.getElementById('catchCount');
+const missionTextEl = document.getElementById('missionText');
 const mountNameEl = document.getElementById('mountName');
 const gameTitleEl = document.getElementById('gameTitle');
 const gameEditionEl = document.getElementById('gameEdition');
@@ -29,6 +30,10 @@ for (const button of touchButtons) {
       swapMount();
       return;
     }
+    if (key === 'Space') {
+      throwToy();
+      return;
+    }
     button.setPointerCapture?.(e.pointerId);
     setKey(true);
   });
@@ -42,6 +47,10 @@ window.addEventListener('keydown', (event) => {
     swapMount();
   }
   if (event.code === 'KeyR' && !event.repeat) resetGame();
+  if ((event.code === 'Space' || event.code === 'Enter') && !event.repeat) {
+    event.preventDefault();
+    throwToy();
+  }
   keys.add(event.code);
 });
 
@@ -49,15 +58,27 @@ window.addEventListener('keyup', (event) => {
   keys.delete(event.code);
 });
 
+const startingHotDogs = [
+  { x: 205, y: 170, r: 22, phase: 0 },
+  { x: 390, y: 260, r: 22, phase: 1.4 },
+  { x: 650, y: 190, r: 22, phase: 2.8 },
+  { x: 780, y: 310, r: 22, phase: 4.2 },
+  { x: 960, y: 190, r: 22, phase: 5.6 },
+  { x: 1050, y: 540, r: 22, phase: 0.8 },
+];
+
 const state = {
   time: 0,
-  stars: 0,
-  totalStars: 6,
+  caught: 0,
+  totalHotDogs: startingHotDogs.length,
+  team: [],
   win: false,
   phase: 'playing',
   noticeTimer: 0,
+  throwCooldown: 0,
   mounted: 'Bootin’',
   mountIndex: 0,
+  facing: { x: 1, y: 0 },
   campfire: { x: 1050, y: 640, r: 48 },
   player: {
     x: 180,
@@ -67,14 +88,8 @@ const state = {
     radius: 20,
     speed: 240,
   },
-  starsList: [
-    { x: 210, y: 160, r: 12 },
-    { x: 332, y: 315, r: 12 },
-    { x: 520, y: 198, r: 12 },
-    { x: 660, y: 390, r: 12 },
-    { x: 840, y: 220, r: 12 },
-    { x: 975, y: 120, r: 12 },
-  ],
+  hotDogs: [],
+  toys: [],
   obstacles: [
     { x: 260, y: 460, w: 120, h: 170 },
     { x: 432, y: 335, w: 180, h: 140 },
@@ -104,30 +119,49 @@ function setMessage(title, text, visible = true, duration = 0) {
   screenMessage.classList.toggle('visible', visible);
 }
 
+function updateHud() {
+  catchCountEl.textContent = `${state.caught} / ${state.totalHotDogs}`;
+  missionTextEl.textContent = state.caught === state.totalHotDogs
+    ? 'All caught! Head back to the campfire with your hot-dog team.'
+    : `Throw toys to catch hot dogs and add them to your team (${state.caught}/${state.totalHotDogs}).`;
+}
+
 function resetGame() {
-  state.stars = 0;
+  state.caught = 0;
+  state.team = [];
   state.win = false;
   state.phase = 'playing';
   state.noticeTimer = 0;
+  state.throwCooldown = 0;
   state.player.x = 180;
   state.player.y = 520;
   state.player.vx = 0;
   state.player.vy = 0;
+  state.facing = { x: 1, y: 0 };
+  state.toys = [];
+  state.hotDogs = startingHotDogs.map((hotDog, index) => ({ ...hotDog, id: index, caught: false }));
   state.mountIndex = 0;
-  state.starsList = [
-    { x: 210, y: 160, r: 12 },
-    { x: 332, y: 315, r: 12 },
-    { x: 520, y: 198, r: 12 },
-    { x: 660, y: 390, r: 12 },
-    { x: 840, y: 220, r: 12 },
-    { x: 975, y: 120, r: 12 },
-  ];
   state.mounted = mounts[0].name;
-  starCountEl.textContent = `0 / ${state.totalStars}`;
+  updateHud();
   mountNameEl.textContent = state.mounted;
   gameTitleEl.textContent = mounts[0].title;
   gameEditionEl.textContent = mounts[0].edition;
-  setMessage('Welcome to the Frontier', 'Ride through the canyon, gather the legendary sparks, and return to camp before sundown.', false);
+  setMessage('Welcome to the Frontier', 'Find the roaming hot dogs, aim with your pup, and press Space to toss a squeaky toy. Catch the whole pack, then return to camp!', false);
+}
+
+function throwToy() {
+  if (state.phase !== 'playing' || state.throwCooldown > 0) return;
+  const { x, y } = state.player;
+  const direction = state.facing;
+  state.toys.push({
+    x: x + direction.x * 36,
+    y: y + direction.y * 36,
+    vx: direction.x * 520,
+    vy: direction.y * 520,
+    life: 0.72,
+    rotation: Math.atan2(direction.y, direction.x),
+  });
+  state.throwCooldown = 0.3;
 }
 
 function clamp(value, min, max) {
@@ -148,30 +182,24 @@ function update(dt) {
     state.noticeTimer -= dt;
     if (state.noticeTimer <= 0) screenMessage.classList.remove('visible');
   }
+  state.throwCooldown = Math.max(0, state.throwCooldown - dt);
 
   const moveX = (keys.has('ArrowRight') || keys.has('KeyD') ? 1 : 0) - (keys.has('ArrowLeft') || keys.has('KeyA') ? 1 : 0);
   const moveY = (keys.has('ArrowDown') || keys.has('KeyS') ? 1 : 0) - (keys.has('ArrowUp') || keys.has('KeyW') ? 1 : 0);
-
   const length = Math.hypot(moveX, moveY) || 1;
   const vx = (moveX / length) * state.player.speed;
   const vy = (moveY / length) * state.player.speed;
+  if (moveX || moveY) state.facing = { x: moveX / length, y: moveY / length };
 
   let nextX = state.player.x + vx * dt;
   let nextY = state.player.y + vy * dt;
-
   const radius = state.player.radius;
-
   for (const obstacle of state.obstacles) {
-    const hit = rectCircleCollide(obstacle, { x: nextX, y: nextY, radius });
-    if (hit) {
-      const prevX = state.player.x;
-      const prevY = state.player.y;
+    if (rectCircleCollide(obstacle, { x: nextX, y: nextY, radius })) {
       const candidateX = state.player.x + vx * dt;
       const candidateY = state.player.y + vy * dt;
-      const safeX = rectCircleCollide(obstacle, { x: candidateX, y: prevY, radius }) ? state.player.x : candidateX;
-      const safeY = rectCircleCollide(obstacle, { x: prevX, y: candidateY, radius }) ? state.player.y : candidateY;
-      nextX = safeX;
-      nextY = safeY;
+      nextX = rectCircleCollide(obstacle, { x: candidateX, y: state.player.y, radius }) ? state.player.x : candidateX;
+      nextY = rectCircleCollide(obstacle, { x: nextX, y: candidateY, radius }) ? state.player.y : candidateY;
     }
   }
 
@@ -182,29 +210,41 @@ function update(dt) {
   state.player.vx = (state.player.x - previousX) / dt;
   state.player.vy = (state.player.y - previousY) / dt;
 
-  for (let i = state.starsList.length - 1; i >= 0; i--) {
-    const star = state.starsList[i];
-    const dist = Math.hypot(state.player.x - star.x, state.player.y - star.y);
-    if (dist < star.r + state.player.radius + 8) {
-      state.starsList.splice(i, 1);
-      state.stars += 1;
-      starCountEl.textContent = `${state.stars} / ${state.totalStars}`;
-      if (state.stars >= state.totalStars) {
-        setMessage('Treat trail complete!', 'You found all six golden treats! Bring Bootin’ and Chewy back to the ranch campfire.', true, 2.4);
+  for (const hotDog of state.hotDogs) {
+    hotDog.x += Math.sin(state.time * 1.5 + hotDog.phase) * 9 * dt;
+    hotDog.y += Math.cos(state.time * 1.2 + hotDog.phase) * 7 * dt;
+  }
+
+  for (let i = state.toys.length - 1; i >= 0; i--) {
+    const toy = state.toys[i];
+    toy.x += toy.vx * dt;
+    toy.y += toy.vy * dt;
+    toy.life -= dt;
+    const target = state.hotDogs.find((hotDog) => !hotDog.caught && Math.hypot(toy.x - hotDog.x, toy.y - hotDog.y) < hotDog.r + 10);
+    if (target) {
+      target.caught = true;
+      state.caught += 1;
+      state.team.push(`Hot Dog ${state.caught}`);
+      updateHud();
+      state.toys.splice(i, 1);
+      if (state.caught === state.totalHotDogs) {
+        setMessage('The whole pack!', 'You caught every hot dog! Bring your new team back to the campfire.', true, 2.6);
+      } else {
+        setMessage('Gotcha!', `Hot Dog ${state.caught} joined your team!`, true, 1.3);
       }
+      continue;
     }
+    if (toy.life <= 0) state.toys.splice(i, 1);
   }
 
   const campDist = Math.hypot(state.player.x - state.campfire.x, state.player.y - state.campfire.y);
-  if (campDist < 58 && state.stars >= state.totalStars && !state.win) {
+  if (campDist < 58 && state.caught === state.totalHotDogs && !state.win) {
     state.win = true;
     state.phase = 'ended';
-    setMessage('Good dogs. Great legends.', 'Bootin’ and Chewy saved the ranch! Press R to run the trail again, or E to switch editions.', true);
-  }
-
-  if (campDist < 58 && state.stars < state.totalStars) {
-    const treatsLeft = state.totalStars - state.stars;
-    setMessage('Campfire ahead', `You still need ${treatsLeft} golden treat${treatsLeft === 1 ? '' : 's'}. Sniff out the rest!`, true, 1.8);
+    setMessage('A pack of legends!', `Bootin’ and Chewy brought all ${state.caught} hot dogs home! Press R to play again, or E to switch pups.`, true);
+  } else if (campDist < 58 && state.caught < state.totalHotDogs && state.noticeTimer <= 0) {
+    const left = state.totalHotDogs - state.caught;
+    setMessage('Campfire ahead', `${left} hot dog${left === 1 ? '' : 's'} still out there. Catch them with your toys first!`, true, 1.8);
   }
 }
 
@@ -301,27 +341,50 @@ function drawCampfire() {
   }
 }
 
-function drawTreat(treat) {
-  const pulse = 1 + Math.sin(state.time * 5 + treat.x) * 0.12;
+function drawHotDog(hotDog) {
+  const bob = Math.sin(state.time * 4 + hotDog.phase) * 2;
   ctx.save();
-  ctx.translate(treat.x, treat.y);
-  ctx.rotate(Math.sin(state.time * 2 + treat.y) * 0.12);
-  ctx.scale(pulse, pulse);
-  ctx.fillStyle = '#ffe49a';
-  ctx.shadowBlur = 18;
-  ctx.shadowColor = '#ffd45f';
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = '#a76432';
+  ctx.translate(hotDog.x, hotDog.y + bob);
+  ctx.scale(1 + Math.sin(state.time * 3 + hotDog.phase) * 0.035, 1);
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = 'rgba(255, 222, 125, 0.65)';
+  // Toasted bun, sausage, and mustard make each roaming creature read as a hot dog.
+  ctx.fillStyle = '#9b552d';
+  ctx.beginPath(); ctx.ellipse(0, 7, 31, 16, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f2c477';
+  ctx.beginPath(); ctx.ellipse(0, 4, 28, 13, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#a93e32';
+  ctx.beginPath(); ctx.roundRect(-25, -5, 45, 15, 8); ctx.fill();
+  ctx.fillStyle = '#f5d451';
+  ctx.lineWidth = 2.5; ctx.strokeStyle = '#f5d451'; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-18, 0); ctx.lineTo(-11, 4); ctx.lineTo(-4, 0); ctx.lineTo(3, 4); ctx.lineTo(10, 0); ctx.stroke();
+  // A tiny pup peeks out of the bun.
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#9b552d';
+  ctx.beginPath(); ctx.ellipse(17, -10, 7, 12, 0.4, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#f1d3a0';
+  ctx.beginPath(); ctx.ellipse(16, -12, 11, 10, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#6e3828';
+  ctx.beginPath(); ctx.ellipse(10, -19, 4, 8, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(21, -19, 4, 8, 0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#231715';
+  ctx.beginPath(); ctx.arc(19, -13, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(25, -10, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawToy(toy) {
+  ctx.save();
+  ctx.translate(toy.x, toy.y);
+  ctx.rotate(toy.rotation);
+  ctx.fillStyle = '#8ed6d1';
+  ctx.strokeStyle = '#235b5c';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(-10, -5, 20, 10, 4);
-  ctx.fill();
-  ctx.stroke();
-  for (const x of [-10, 10]) {
-    ctx.beginPath(); ctx.arc(x, -6, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x, 6, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  }
-  ctx.fillStyle = '#fff5cb';
-  ctx.beginPath(); ctx.arc(-3, -1, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.arc(-7, 0, 5, 0, Math.PI * 2);
+  ctx.arc(7, 0, 5, 0, Math.PI * 2);
+  ctx.roundRect(-8, -4, 16, 8, 4);
+  ctx.fill(); ctx.stroke();
   ctx.restore();
 }
 
@@ -342,6 +405,7 @@ function drawPlayer() {
   const bounce = moving ? Math.sin(state.time * 17) * 2.5 : Math.sin(state.time * 3) * 1.2;
   ctx.save();
   ctx.translate(p.x, p.y + bounce);
+  if (state.facing.x < -0.25) ctx.scale(-1, 1);
 
   // Soft shadow under the little cowboy.
   ctx.fillStyle = 'rgba(42, 26, 19, 0.28)';
@@ -397,7 +461,8 @@ function render() {
   drawBackground();
   drawCampfire();
   drawObstacles();
-  for (const treat of state.starsList) drawTreat(treat);
+  for (const hotDog of state.hotDogs) if (!hotDog.caught) drawHotDog(hotDog);
+  for (const toy of state.toys) drawToy(toy);
   drawPlayer();
 }
 
